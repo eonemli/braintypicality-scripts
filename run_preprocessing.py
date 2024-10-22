@@ -1,0 +1,240 @@
+import glob
+import os
+import re
+import sys
+from concurrent.futures import ProcessPoolExecutor
+from functools import partial
+from time import time
+
+import numpy as np
+from tqdm.auto import tqdm
+
+from mri_utils import (
+    get_bratspedpaths,
+    get_ebdspaths,
+    get_hcpdpaths,
+    get_ibispaths,
+    register_and_match,
+)
+
+# os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+
+DATADIR = "/BEE/Connectome/ABCD/"
+CACHEDIR = "/ASD/ahsan_projects/braintypicality/dataset/template_cache/"
+
+
+def runner(
+    path,
+    dataset,
+    save_sub_dir="processed_v2",
+    label_img=False,
+    compute_brain_mask=True,
+    run_segmentation=False,
+):
+    import ants
+    import antspynet
+    # import tensorflow as tf
+
+    # gpus = tf.config.list_physical_devices("GPU")
+
+    # if gpus:
+    #     try:
+    #         # Currently, memory growth needs to be the same across GPUs
+    #         for gpu in gpus:
+    #             tf.config.experimental.set_memory_growth(gpu, True)
+    #         logical_gpus = tf.config.experimental.list_logical_devices("GPU")
+    #         print(len(gpus), "Physical GPUs,", len(logical_gpus), "Logical GPUs")
+    #     except RuntimeError as e:
+    #         # Memory growth must be set before GPUs have been initialized
+    #         print(e)
+
+    t1_path = t2_path = label_path = None
+
+    if dataset == "ABCD":
+        R = re.compile(r"Data\/sub-(.*)\/ses-")
+        subject_id = R.search(path).group(1)
+        t1_path = path
+        t2_path = path.replace("T1w", "T2w")
+    elif dataset == "IBIS":
+        subject_id, t1_path = path
+        subject_id = dataset + subject_id
+        t2_path = t1_path.replace("T1w", "T2w")
+    elif dataset == "EBDS":
+        subject_id, t1_path = path
+        subject_id = dataset + subject_id
+        t2_path = t1_path.replace("T1.nrrd", "T2.nrrd")
+    elif dataset == "HCPD":
+        subject_id, t1_path = path
+        t2_path = t1_path.replace("T1w_", "T2w_")
+    elif dataset == "BRATS-PED":
+        subject_id, t1_path = path
+        t2_path = t1_path.replace("t1n.nii.gz", "t2w.nii.gz")
+        label_path = t1_path.replace("t1n.nii.gz", "seg.nii.gz")
+
+    else:
+        raise NotImplementedError
+
+    if dataset == "EBDS":
+        assert not compute_brain_mask
+
+    t1_img = ants.image_read(t1_path)
+    t2_img = ants.image_read(t2_path)
+    # print(f"Loaded image from {t1_path}")
+    # print(f"Loaded image from {t2_path}")
+
+    # Rigid regsiter to MNI + hist normalization + min/max scaling
+    t1_img, t1_mask, registration = register_and_match(
+        t1_img,
+        modality="t1",
+        antsxnet_cache_directory=CACHEDIR,
+        verbose=False,
+        compute_brain_mask=compute_brain_mask,
+    )
+
+    # Register t2 to the t1 already registered to MNI above
+    t2_img, t2_mask, _ = register_and_match(
+        t2_img,
+        modality="t2",
+        target_img=t1_img,
+        target_img_mask=t1_mask,
+        antsxnet_cache_directory=CACHEDIR,
+        verbose=False,
+        compute_brain_mask=compute_brain_mask,
+    )
+
+    # Further apply the opposite modality masks to get a tighter brain crop
+    # the same as t1_mask & t2_mask
+    combined_mask = t1_mask * t2_mask
+    t1_img *= combined_mask
+    t2_img *= combined_mask
+
+    preproc_img = ants.merge_channels([t1_img, t2_img])
+    fname = os.path.join(
+        f"/{DATADIR}/Users/amahmood/braintyp/{save_sub_dir}", f"{subject_id}.nii.gz"
+    )
+    preproc_img.to_filename(fname)
+
+    # Register label segmentations to new t1
+    if label_img:
+        assert label_path is not None
+        lab_img = ants.image_read(label_path)
+        lab_img = ants.apply_transforms(
+            fixed=t1_img,
+            moving=lab_img,
+            transformlist=registration["fwdtransforms"],
+            interpolator="genericLabel",
+        )
+        fname = os.path.join(
+            f"/{DATADIR}/Users/amahmood/braintyp/{save_sub_dir}",
+            f"{subject_id}_label.nii.gz",
+        )
+        lab_img.to_filename(fname)
+
+    if run_segmentation:
+        t1_seg = antspynet.utilities.deep_atropos(
+            t1_img, antsxnet_cache_directory=CACHEDIR
+        )["segmentation_image"]
+
+        # Also register segmentations to new t1
+        t1_seg = ants.apply_transforms(
+            fixed=t1_img,
+            moving=t1_seg,
+            transformlist=registration["fwdtransforms"],
+            interpolator="genericLabel",
+        )
+
+        wm_mask = t1_seg == 3
+        t1_wm = t1_img * wm_mask
+        t1_wm = t1_wm[t1_wm > 0].ravel()
+
+        t2_wm = t2_img * wm_mask
+        t2_wm = t2_wm[t2_wm > 0].ravel()
+
+        # Save outputs
+        fname = os.path.join(
+            f"/{DATADIR}/Users/amahmood/braintyp/segs/", f"{subject_id}.npz"
+        )
+        np.savez_compressed(fname, **{"t1": t1_wm, "t2": t2_wm})
+
+    return
+
+
+def run(paths, process_fn, chunksize=4):
+    start_idx = 0
+    start = time()
+    progress_bar = tqdm(
+        range(0, len(paths), chunksize),
+        total=len(paths) // chunksize,
+        initial=0,
+        desc="# Processed: ?",
+    )
+
+    with ProcessPoolExecutor(max_workers=chunksize) as exc:
+        for idx in progress_bar:
+            idx_ = idx + start_idx
+            result = list(exc.map(process_fn, paths[idx_ : idx_ + chunksize]))
+            progress_bar.set_description("# Processed: {:d}".format(idx_))
+
+    # for idx in progress_bar:
+    #     idx_ = idx + start_idx
+    #     if idx_ > len(progress_bar):
+    #         break
+    #     process_fn(paths[idx_])
+    #     progress_bar.set_description("# Processed: {:d}".format(idx_))
+    #     break
+
+    print("Time Taken: {:.3f}".format(time() - start))
+
+
+if __name__ == "__main__":
+    dataset = sys.argv[1]
+    assert dataset in [
+        "HCP",
+        "BRATS-PED",
+        "EBDS",
+        "IBIS",
+        "HCPD",
+        "ABCD",
+    ], "Dataset name must be defined"
+
+    if dataset == "BRATS-PED":
+        file_paths = get_bratspedpaths()
+        run(
+            file_paths,
+            partial(
+                runner,
+                dataset=dataset,
+                save_sub_dir="brats-ped",
+                compute_brain_mask=False,
+                label_img=True,
+            ),
+        )
+    elif dataset == "EBDS":
+        file_paths = get_ebdspaths()
+        run(
+            file_paths,
+            partial(runner, dataset=dataset, compute_brain_mask=False),
+        )
+    elif dataset == "IBIS":
+        file_paths = get_ibispaths()
+        run(file_paths, partial(runner, dataset=dataset))
+    elif dataset == "HCPD":
+        file_paths = get_hcpdpaths()
+        run(file_paths, partial(runner, dataset=dataset))
+    else:  # get abcd paths
+        paths = glob.glob(
+            "/{DATADIR}/ImageData/Data/*/ses-baselineYear1Arm1/anat/*T1w.nii.gz"
+        )
+        R = re.compile(r"Data\/sub-(.*)\/ses-")
+        clean = lambda x: x.strip().replace("_", "")
+
+        with open("abcd_qc_passing_keys.txt", "r") as f:
+            abcd_qc_keys = set([clean(x) for x in f.readlines()])
+
+        file_paths = []
+        id_checker = lambda x: R.search(x).group(1) in abcd_qc_keys
+        file_paths = list(filter(id_checker, paths))
+
+        assert len(file_paths) == len(abcd_qc_keys)
+
+        run(file_paths, runner)
