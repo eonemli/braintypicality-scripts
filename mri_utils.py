@@ -367,6 +367,9 @@ def lesion_preprocessor(sample):
 
 
 def get_matcher(dataset):
+    if dataset == "HCP":
+        return re.compile(r"HCP_Data\/(\d*)\/T1w*")
+
     if dataset == "EBDS":
         return re.compile(r"EBDS/(.*)/\d{1,2}year*")
 
@@ -378,6 +381,9 @@ def get_matcher(dataset):
 
     if dataset == "BraTS-PED":
         return re.compile(r"(BraTS-PED-\d*-\d*)-")
+    
+    if dataset == "BraTS-GLI":
+        return re.compile(r"(BraTS-GLI-\d*-\d*)-")
 
     # ABCD adult matcher
     if dataset == "ABCD":
@@ -429,10 +435,25 @@ def get_bratspedpaths(split="train"):
         match = R.search(path)
         sub_id = match.group(1)
         id_paths.append((sub_id, path))
-    print(id_paths[0])
+
     print("Collected:", len(id_paths))
     return id_paths
 
+def get_bratsgliomapaths(split="train"):
+    R = get_matcher("BraTS-GLI")
+    paths = glob.glob(
+        "/ASD2/ahsan_projects/datasets/BRATS2023-Glioma/ASNR-MICCAI-BraTS2023-GLI-Challenge-TrainingData/*/*-t1n.nii.gz"
+    )
+    print("FOUND:", len(list(paths)))
+
+    id_paths = []
+    for path in paths:
+        match = R.search(path)
+        sub_id = match.group(1)
+        id_paths.append((sub_id, path))
+    print(id_paths[0])
+    print("Collected:", len(id_paths))
+    return id_paths
 
 def get_ibispaths(split="train"):
     R = get_matcher("IBIS")
@@ -528,6 +549,27 @@ def get_ebdspaths():
     return id_paths
 
 
+def get_hcppaths(split="train"):
+    R = get_matcher("HCP")
+
+    paths = glob.glob("/theia_archive/HCP_Data/*/T1w/T1w_acpc_dc.nii.gz")
+    print("FOUND:", len(list(paths)))
+
+    id_paths = []
+    for path in paths:
+        t2_path = path.replace("T1w_", "T2w_")
+        if not os.path.exists(t2_path):
+            continue
+
+        match = R.search(path)
+        sub_id = match.group(1)
+        id_paths.append((sub_id, path))
+
+    print("Collected:", len(id_paths))
+
+    return id_paths
+
+
 def run(paths, process_fn):
     start = time()
     progress_bar = tqdm(
@@ -556,11 +598,11 @@ if __name__ == "__main__":
     BASE_DIR = "/DATA/Users/amahmood/braintyp/"
     DATASET = sys.argv[1]
     split = "train"
-
     contrast_experiment = False
-    contrast_multiples = [110, 120, 130, 140]
 
-    if DATASET == "BRATS-PED":
+    if DATASET == "BRATS-GLI":
+        paths = get_bratsgliomapaths()
+    elif DATASET == "BRATS-PED":
         paths = get_bratspedpaths()
     elif DATASET == "LESION":
         SAVE_DIR = os.path.join(BASE_DIR, "lesion-hc")
@@ -569,19 +611,19 @@ if __name__ == "__main__":
     #     SAVE_DIR = os.path.join(BASE_DIR, "tumor")
     #     paths = get_bratspaths()
     elif DATASET == "IBIS":
-        SAVE_DIR = os.path.join(BASE_DIR, "ibis")
         paths = get_ibispaths()
     elif DATASET == "HCPD":
-        SAVE_DIR = os.path.join(BASE_DIR, "hcpd")
         paths = get_hcpdpaths()
+    elif DATASET == "HCP":
+        paths = get_hcppaths()
     else:
-        SAVE_DIR = os.path.join(BASE_DIR, "processed")
         paths = get_abcdpaths(split)
 
     # if not os.path.exists(SAVE_DIR):
     #     os.makedirs(SAVE_DIR)
 
     if DATASET == "LESION":
+        contrast_multiples = [110, 120, 130, 140]
         process_fn = lesion_preprocessor
 
         if contrast_experiment:

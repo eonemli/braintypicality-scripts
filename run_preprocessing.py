@@ -10,17 +10,46 @@ import numpy as np
 from tqdm.auto import tqdm
 
 from mri_utils import (
+    get_bratsgliomapaths,
     get_bratspedpaths,
     get_ebdspaths,
     get_hcpdpaths,
+    get_hcppaths,
     get_ibispaths,
     register_and_match,
 )
 
-# os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+
+
 
 DATADIR = "/BEE/Connectome/ABCD/"
 CACHEDIR = "/ASD/ahsan_projects/braintypicality/dataset/template_cache/"
+
+import tensorflow as tf
+
+gpus = tf.config.list_physical_devices("GPU")
+
+if gpus:
+    print("Found GPUs:", gpus)
+    # Restrict TensorFlow to only use the first GPU
+    try:
+        tf.config.set_visible_devices(gpus[0], 'GPU')
+        logical_gpus = tf.config.list_logical_devices('GPU')
+        print(len(gpus), "Physical GPUs,", len(logical_gpus), "Logical GPU")
+    except RuntimeError as e:
+        # Visible devices must be set before GPUs have been initialized
+        print(e)
+
+    try:
+        # Currently, memory growth needs to be the same across GPUs
+        for gpu in gpus:
+            tf.config.experimental.set_memory_growth(gpu, True)
+        logical_gpus = tf.config.experimental.list_logical_devices("GPU")
+        print(len(gpus), "Physical GPUs,", len(logical_gpus), "Logical GPUs")
+    except RuntimeError as e:
+        # Memory growth must be set before GPUs have been initialized
+        print(e)
 
 
 def runner(
@@ -33,20 +62,8 @@ def runner(
 ):
     import ants
     import antspynet
-    # import tensorflow as tf
+    from antspynet.utilities import preprocess_brain_image
 
-    # gpus = tf.config.list_physical_devices("GPU")
-
-    # if gpus:
-    #     try:
-    #         # Currently, memory growth needs to be the same across GPUs
-    #         for gpu in gpus:
-    #             tf.config.experimental.set_memory_growth(gpu, True)
-    #         logical_gpus = tf.config.experimental.list_logical_devices("GPU")
-    #         print(len(gpus), "Physical GPUs,", len(logical_gpus), "Logical GPUs")
-    #     except RuntimeError as e:
-    #         # Memory growth must be set before GPUs have been initialized
-    #         print(e)
 
     t1_path = t2_path = label_path = None
 
@@ -66,11 +83,14 @@ def runner(
     elif dataset == "HCPD":
         subject_id, t1_path = path
         t2_path = t1_path.replace("T1w_", "T2w_")
-    elif dataset == "BRATS-PED":
+    elif dataset in ["BRATS-PED", "BRATS-GLI"]:
         subject_id, t1_path = path
         t2_path = t1_path.replace("t1n.nii.gz", "t2w.nii.gz")
         label_path = t1_path.replace("t1n.nii.gz", "seg.nii.gz")
-
+    elif dataset == "HCP":
+        subject_id, t1_path = path
+        t2_path = t1_path.replace("T1w_", "T2w_")
+        subject_id = dataset + subject_id
     else:
         raise NotImplementedError
 
@@ -131,10 +151,26 @@ def runner(
         lab_img.to_filename(fname)
 
     if run_segmentation:
+        
+        t1_preprocessing = preprocess_brain_image(t1_img,
+                truncate_intensity=(0.01, 0.99),
+                brain_extraction_modality=None,
+                template="croppedMni152",
+                template_transform_type="antsRegistrationSyNQuickRepro[a]",
+                do_bias_correction=True,
+                do_denoising=True,
+                verbose=False)
+        t1_preprocessed = t1_preprocessing["preprocessed_image"]
+        
         t1_seg = antspynet.utilities.deep_atropos(
-            t1_img, antsxnet_cache_directory=CACHEDIR
+            t1_preprocessed,
+            do_preprocessing=False,
+#             antsxnet_cache_directory=CACHEDIR,
+            verbose=True
         )["segmentation_image"]
-
+        
+        t1_seg.to_filename(f"/{DATADIR}/Users/amahmood/braintyp/segs/{subject_id}.nii.gz")
+        
         # Also register segmentations to new t1
         t1_seg = ants.apply_transforms(
             fixed=t1_img,
@@ -181,7 +217,6 @@ def run(paths, process_fn, chunksize=4):
     #         break
     #     process_fn(paths[idx_])
     #     progress_bar.set_description("# Processed: {:d}".format(idx_))
-    #     break
 
     print("Time Taken: {:.3f}".format(time() - start))
 
@@ -190,6 +225,7 @@ if __name__ == "__main__":
     dataset = sys.argv[1]
     assert dataset in [
         "HCP",
+        "BRATS-GLI",
         "BRATS-PED",
         "EBDS",
         "IBIS",
@@ -197,18 +233,25 @@ if __name__ == "__main__":
         "ABCD",
     ], "Dataset name must be defined"
 
-    if dataset == "BRATS-PED":
-        file_paths = get_bratspedpaths()
+    if dataset in ["BRATS-PED", "BRATS-GLI"]:
+        if dataset == "BRATS-PED":
+            file_paths = get_bratspedpaths()
+        else:
+            file_paths = get_bratsgliomapaths()
         run(
             file_paths,
             partial(
                 runner,
                 dataset=dataset,
-                save_sub_dir="brats-ped",
+                save_sub_dir=dataset.lower(),
                 compute_brain_mask=False,
                 label_img=True,
+                run_segmentation=False,
             ),
         )
+    elif dataset == "HCP":
+        file_paths = get_hcppaths()
+        run(file_paths, partial(runner, dataset=dataset))
     elif dataset == "EBDS":
         file_paths = get_ebdspaths()
         run(
