@@ -7,6 +7,7 @@ from functools import partial
 from time import time
 
 import numpy as np
+import tensorflow as tf
 from tqdm.auto import tqdm
 
 from mri_utils import (
@@ -16,17 +17,16 @@ from mri_utils import (
     get_hcpdpaths,
     get_hcppaths,
     get_ibispaths,
+    get_mslubpaths,
     register_and_match,
 )
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
-
+os.environ["CUDA_VISIBLE_DEVICES"] = "3"
 
 
 DATADIR = "/BEE/Connectome/ABCD/"
 CACHEDIR = "/ASD/ahsan_projects/braintypicality/dataset/template_cache/"
 
-import tensorflow as tf
 
 gpus = tf.config.list_physical_devices("GPU")
 
@@ -34,8 +34,8 @@ if gpus:
     print("Found GPUs:", gpus)
     # Restrict TensorFlow to only use the first GPU
     try:
-        tf.config.set_visible_devices(gpus[0], 'GPU')
-        logical_gpus = tf.config.list_logical_devices('GPU')
+        tf.config.set_visible_devices(gpus[0], "GPU")
+        logical_gpus = tf.config.list_logical_devices("GPU")
         print(len(gpus), "Physical GPUs,", len(logical_gpus), "Logical GPU")
     except RuntimeError as e:
         # Visible devices must be set before GPUs have been initialized
@@ -64,7 +64,6 @@ def runner(
     import antspynet
     from antspynet.utilities import preprocess_brain_image
 
-
     t1_path = t2_path = label_path = None
 
     if dataset == "ABCD":
@@ -91,16 +90,27 @@ def runner(
         subject_id, t1_path = path
         t2_path = t1_path.replace("T1w_", "T2w_")
         subject_id = dataset + subject_id
+    elif dataset == "MSLUB":
+        subject_id, t1_path = path
+        t2_path = t1_path.replace("T1W.nii.gz", "T2W.nii.gz")
+        label_path = t1_path.replace("T1W.nii.gz", "consensus_gt.nii.gz")
+        mask_path = t1_path.replace("T1W.nii.gz", "brainmask.nii.gz")
+        subject_id = dataset + subject_id
     else:
         raise NotImplementedError
 
-    if dataset == "EBDS":
-        assert not compute_brain_mask
-
     t1_img = ants.image_read(t1_path)
     t2_img = ants.image_read(t2_path)
-    # print(f"Loaded image from {t1_path}")
-    # print(f"Loaded image from {t2_path}")
+
+    if dataset in ["BRATS-PED", "BRATS-GLI", "EBDS"]:
+        assert not compute_brain_mask, "{dataset} is already brain masked"
+    
+    if dataset == "MSLUB":
+        assert not compute_brain_mask, "MSLUB has precomputed brain masks"
+        mask_img = ants.image_read(mask_path)
+        t1_img *= mask_img
+        t2_img *= mask_img
+
 
     # Rigid regsiter to MNI + hist normalization + min/max scaling
     t1_img, t1_mask, registration = register_and_match(
@@ -151,26 +161,29 @@ def runner(
         lab_img.to_filename(fname)
 
     if run_segmentation:
-        
-        t1_preprocessing = preprocess_brain_image(t1_img,
-                truncate_intensity=(0.01, 0.99),
-                brain_extraction_modality=None,
-                template="croppedMni152",
-                template_transform_type="antsRegistrationSyNQuickRepro[a]",
-                do_bias_correction=True,
-                do_denoising=True,
-                verbose=False)
+        t1_preprocessing = preprocess_brain_image(
+            t1_img,
+            truncate_intensity=(0.01, 0.99),
+            brain_extraction_modality=None,
+            template="croppedMni152",
+            template_transform_type="antsRegistrationSyNQuickRepro[a]",
+            do_bias_correction=True,
+            do_denoising=True,
+            verbose=False,
+        )
         t1_preprocessed = t1_preprocessing["preprocessed_image"]
-        
+
         t1_seg = antspynet.utilities.deep_atropos(
             t1_preprocessed,
             do_preprocessing=False,
-#             antsxnet_cache_directory=CACHEDIR,
-            verbose=True
+            #             antsxnet_cache_directory=CACHEDIR,
+            verbose=True,
         )["segmentation_image"]
-        
-        t1_seg.to_filename(f"/{DATADIR}/Users/amahmood/braintyp/segs/{subject_id}.nii.gz")
-        
+
+        t1_seg.to_filename(
+            f"/{DATADIR}/Users/amahmood/braintyp/segs/{subject_id}.nii.gz"
+        )
+
         # Also register segmentations to new t1
         t1_seg = ants.apply_transforms(
             fixed=t1_img,
@@ -195,7 +208,7 @@ def runner(
     return
 
 
-def run(paths, process_fn, chunksize=4):
+def run(paths, process_fn, chunksize=1):
     start_idx = 0
     start = time()
     progress_bar = tqdm(
@@ -205,18 +218,18 @@ def run(paths, process_fn, chunksize=4):
         desc="# Processed: ?",
     )
 
-    with ProcessPoolExecutor(max_workers=chunksize) as exc:
-        for idx in progress_bar:
-            idx_ = idx + start_idx
-            result = list(exc.map(process_fn, paths[idx_ : idx_ + chunksize]))
-            progress_bar.set_description("# Processed: {:d}".format(idx_))
+    # with ProcessPoolExecutor(max_workers=chunksize) as exc:
+    #     for idx in progress_bar:
+    #         idx_ = idx + start_idx
+    #         result = list(exc.map(process_fn, paths[idx_ : idx_ + chunksize]))
+    #         progress_bar.set_description("# Processed: {:d}".format(idx_))
 
-    # for idx in progress_bar:
-    #     idx_ = idx + start_idx
-    #     if idx_ > len(progress_bar):
-    #         break
-    #     process_fn(paths[idx_])
-    #     progress_bar.set_description("# Processed: {:d}".format(idx_))
+    for idx in progress_bar:
+        idx_ = idx + start_idx
+        if idx_ > len(progress_bar):
+            break
+        process_fn(paths[idx_])
+        progress_bar.set_description("# Processed: {:d}".format(idx_))
 
     print("Time Taken: {:.3f}".format(time() - start))
 
@@ -224,6 +237,7 @@ def run(paths, process_fn, chunksize=4):
 if __name__ == "__main__":
     dataset = sys.argv[1]
     assert dataset in [
+        "MSLUB",
         "HCP",
         "BRATS-GLI",
         "BRATS-PED",
@@ -247,6 +261,19 @@ if __name__ == "__main__":
                 compute_brain_mask=False,
                 label_img=True,
                 run_segmentation=False,
+            ),
+        )
+    elif dataset == "MSLUB":
+        file_paths = get_mslubpaths()
+        run(
+            file_paths,
+            partial(
+                runner,
+                dataset=dataset,
+                save_sub_dir=dataset.lower(),
+                label_img=True,
+                run_segmentation=False,
+                compute_brain_mask=False,
             ),
         )
     elif dataset == "HCP":

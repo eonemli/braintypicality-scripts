@@ -367,6 +367,8 @@ def lesion_preprocessor(sample):
 
 
 def get_matcher(dataset):
+    if dataset == "MSLUB":
+        return re.compile(r"patient(\d\d)_*")
     if dataset == "HCP":
         return re.compile(r"HCP_Data\/(\d*)\/T1w*")
 
@@ -381,7 +383,7 @@ def get_matcher(dataset):
 
     if dataset == "BraTS-PED":
         return re.compile(r"(BraTS-PED-\d*-\d*)-")
-    
+
     if dataset == "BraTS-GLI":
         return re.compile(r"(BraTS-GLI-\d*-\d*)-")
 
@@ -439,6 +441,7 @@ def get_bratspedpaths(split="train"):
     print("Collected:", len(id_paths))
     return id_paths
 
+
 def get_bratsgliomapaths(split="train"):
     R = get_matcher("BraTS-GLI")
     paths = glob.glob(
@@ -454,6 +457,7 @@ def get_bratsgliomapaths(split="train"):
     print(id_paths[0])
     print("Collected:", len(id_paths))
     return id_paths
+
 
 def get_ibispaths(split="train"):
     R = get_matcher("IBIS")
@@ -570,6 +574,29 @@ def get_hcppaths(split="train"):
     return id_paths
 
 
+def get_mslubpaths(split="train"):
+    R = get_matcher("MSLUB")
+
+    paths = glob.glob(
+        "/ASD2/ahsan_projects/datasets/MSLUB/patient*/patient*_T1W.nii.gz"
+    )
+    print("FOUND:", len(list(paths)))
+
+    id_paths = []
+    for path in paths:
+        t2_path = path.replace("_T1W", "_T2W")
+        if not os.path.exists(t2_path):
+            continue
+
+        match = R.search(path)
+        sub_id = match.group(1)
+        id_paths.append((sub_id, path))
+
+    print("Collected:", len(id_paths))
+
+    return id_paths
+
+
 def run(paths, process_fn):
     start = time()
     progress_bar = tqdm(
@@ -600,7 +627,9 @@ if __name__ == "__main__":
     split = "train"
     contrast_experiment = False
 
-    if DATASET == "BRATS-GLI":
+    if DATASET == "MSLUB":
+        paths = get_mslubpaths()
+    elif DATASET == "BRATS-GLI":
         paths = get_bratsgliomapaths()
     elif DATASET == "BRATS-PED":
         paths = get_bratspedpaths()
