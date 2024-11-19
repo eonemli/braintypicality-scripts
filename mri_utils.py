@@ -45,7 +45,7 @@ def extract_brain_mask(
 ):
     from antspynet.utilities import brain_extraction
 
-    if antsxnet_cache_directory == None:
+    if antsxnet_cache_directory is None:
         antsxnet_cache_directory = "ANTsXNet"
 
     # Truncating intensity as a preprocessing step following the original ants function
@@ -56,7 +56,7 @@ def extract_brain_mask(
             image.quantile(truncate_intensity[0]),
             image.quantile(truncate_intensity[1]),
         )
-        if verbose == True:
+        if verbose:
             print(
                 "Preprocessing:  truncate intensities ( low =",
                 quantiles[0],
@@ -87,6 +87,10 @@ def register_and_match(
     target_img=None,
     target_img_mask=None,
     label=None,
+    mask=None,
+    do_bias_correction=True,
+    histogram_match=True,
+    histogram_match_points=5,
     compute_brain_mask=True,
     truncate_intensity=(0.01, 0.99),
     modality="t1",
@@ -160,7 +164,7 @@ def register_and_match(
         preprocessed_image[image > quantiles[1]] = quantiles[1]
 
     # Brain extraction
-    mask = None
+    # mask = None
     if compute_brain_mask:
         probability_mask = brain_extraction(
             preprocessed_image,
@@ -170,8 +174,8 @@ def register_and_match(
         )
         mask = ants.threshold_image(probability_mask, 0.5, 1, 1, 0)
         mask = ants.morphology(mask, "close", 6).iMath_fill_holes()
-    else:
-        mask = image > 0
+    # else:
+    #     mask = (image > 0).astype("float32")
 
     # Template normalization
     template_image = t1_ref_img if modality == "t1" else t2_ref_img
@@ -185,8 +189,8 @@ def register_and_match(
     #     template_image = t2_ref_img
 
     # Similar to ANTsPyNet we compute the registration via masked images
-    target_brain_img = target_img * target_img_mask
-    preprocessed_brain_image = preprocessed_image * mask
+    target_brain_img = ants.mask_image(target_img, target_img_mask)
+    preprocessed_brain_image = ants.mask_image(preprocessed_image, mask)
     registration = ants.registration(
         fixed=target_brain_img,
         moving=preprocessed_brain_image,
@@ -219,28 +223,33 @@ def register_and_match(
             verbose=verbose,
         )
 
-    # Note that bias correction takes in UNMASKED images
-    if verbose == True:
-        print("Preprocessing:  brain correction.")
-    n4_output = None
-    n4_output = ants.n4_bias_field_correction(
-        preprocessed_image,
-        mask,
-        shrink_factor=4,
-        return_bias_field=False,
-        verbose=verbose,
-    )
-    preprocessed_image = n4_output
+    if do_bias_correction:
+
+        # Note that bias correction takes in UNMASKED images
+        if verbose:
+            print("Preprocessing:  brain correction.")
+
+        n4_output = None
+        n4_output = ants.n4_bias_field_correction(
+            preprocessed_image,
+            mask,
+            shrink_factor=4,
+            return_bias_field=False,
+            verbose=verbose,
+        )
+        preprocessed_image = n4_output
+
+    preprocessed_image = ants.mask_image(preprocessed_image, mask)
 
     # Histogram matching with template
-    template_brain_image = template_image * template_img_mask
-    preprocessed_image = preprocessed_image * mask
-    preprocessed_image = ants.histogram_match_image(
-        preprocessed_image,
-        template_brain_image,
-        number_of_histogram_bins=128,
-        number_of_match_points=5,  # Could leave to 1 or 2 if u wanna emphasize intensity during training
-    )
+    if histogram_match:
+        template_brain_image = ants.mask_image(template_image, template_img_mask)
+        preprocessed_image = ants.histogram_match_image(
+            preprocessed_image,
+            template_brain_image,
+            number_of_histogram_bins=128,
+            number_of_match_points=histogram_match_points,  # Could leave to 1 or 2 if u wanna emphasize intensity during training
+        )
 
     # Min max norm
     preprocessed_image = (preprocessed_image - preprocessed_image.min()) / (
@@ -367,6 +376,13 @@ def lesion_preprocessor(sample):
 
 
 def get_matcher(dataset):
+
+    if dataset == "MSSEG":
+        return re.compile(r"UNC_train_(Case\d*)\/")
+
+    if dataset == "CamCAN":
+        return re.compile(r"sub-(CC\d*)\/anat")
+
     if dataset == "MSLUB":
         return re.compile(r"patient(\d\d)_*")
     if dataset == "HCP":
@@ -597,6 +613,49 @@ def get_mslubpaths(split="train"):
     return id_paths
 
 
+def get_camcanpaths(split="train"):
+    R = get_matcher("CamCAN")
+
+    paths = glob.glob(
+        "/BEE/CamCAN/Download/cc700/mri/pipeline/release004/BIDS_20190411/anat/sub-CC[0-9]*/anat/*_T1w.nii.gz"
+    )
+    print("FOUND:", len(list(paths)))
+
+    id_paths = []
+    for path in paths:
+        t2_path = path.replace("_T1w", "_T2w")
+        if not os.path.exists(t2_path):
+            continue
+
+        match = R.search(path)
+        sub_id = match.group(1)
+        id_paths.append((sub_id, path))
+
+    print("Collected:", len(id_paths))
+
+    return id_paths
+
+
+def get_mssegpaths(split="train"):
+    R = get_matcher("MSSEG")
+
+    paths = glob.glob("/ASD2/ahsan_projects/datasets/NIRAL_MSSeg/*/*_T1.nhdr")
+    print("FOUND:", len(list(paths)))
+
+    id_paths = []
+    for path in paths:
+        t2_path = path.replace("_T1", "_T2")
+        if not os.path.exists(t2_path):
+            continue
+
+        match = R.search(path)
+        sub_id = match.group(1)
+        id_paths.append((sub_id, path))
+
+    print("Collected:", len(id_paths))
+    return id_paths
+
+
 def run(paths, process_fn):
     start = time()
     progress_bar = tqdm(
@@ -627,7 +686,11 @@ if __name__ == "__main__":
     split = "train"
     contrast_experiment = False
 
-    if DATASET == "MSLUB":
+    if DATASET == "MSSEG":
+        paths = get_mssegpaths()
+    elif DATASET == "CamCAN":
+        paths = get_camcanpaths()
+    elif DATASET == "MSLUB":
         paths = get_mslubpaths()
     elif DATASET == "BRATS-GLI":
         paths = get_bratsgliomapaths()

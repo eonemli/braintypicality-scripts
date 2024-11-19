@@ -13,11 +13,13 @@ from tqdm.auto import tqdm
 from mri_utils import (
     get_bratsgliomapaths,
     get_bratspedpaths,
+    get_camcanpaths,
     get_ebdspaths,
     get_hcpdpaths,
     get_hcppaths,
     get_ibispaths,
     get_mslubpaths,
+    get_mssegpaths,
     register_and_match,
 )
 
@@ -57,14 +59,19 @@ def runner(
     dataset,
     save_sub_dir="processed_v2",
     label_img=False,
-    compute_brain_mask=True,
     run_segmentation=False,
+    compute_brain_mask=True,
+    do_bias_correction=True,
+    histogram_match=True,
+    histogram_match_points=5,
+
 ):
     import ants
     import antspynet
     from antspynet.utilities import preprocess_brain_image
 
     t1_path = t2_path = label_path = None
+    os.makedirs(f"/{DATADIR}/Users/amahmood/braintyp/{save_sub_dir}", exist_ok=True)
 
     if dataset == "ABCD":
         R = re.compile(r"Data\/sub-(.*)\/ses-")
@@ -93,8 +100,19 @@ def runner(
     elif dataset == "MSLUB":
         subject_id, t1_path = path
         t2_path = t1_path.replace("T1W.nii.gz", "T2W.nii.gz")
+        dirpath = os.path.dirname(t1_path).replace("/raw", "")
+        # sid = os.path.basename(dirpath)
+        # label_path = os.path.join(dirpath, f"{sid}_consensus_gt.nii.gz")
         label_path = t1_path.replace("T1W.nii.gz", "consensus_gt.nii.gz")
-        mask_path = t1_path.replace("T1W.nii.gz", "brainmask.nii.gz")
+        mask_path = label_path.replace("consensus_gt.nii.gz", "brainmask.nii.gz")
+        subject_id = dataset + subject_id
+    elif dataset == "CAMCAN":
+        subject_id, t1_path = path
+        t2_path = t1_path.replace("_T1w", "_T2w")
+        subject_id = dataset + subject_id
+    elif dataset == "MSSEG":
+        subject_id, t1_path = path
+        t2_path = t1_path.replace("_T1", "_T2")
         subject_id = dataset + subject_id
     else:
         raise NotImplementedError
@@ -102,15 +120,16 @@ def runner(
     t1_img = ants.image_read(t1_path)
     t2_img = ants.image_read(t2_path)
 
+    mask_img = None
+
     if dataset in ["BRATS-PED", "BRATS-GLI", "EBDS"]:
         assert not compute_brain_mask, "{dataset} is already brain masked"
-    
+
     if dataset == "MSLUB":
         assert not compute_brain_mask, "MSLUB has precomputed brain masks"
         mask_img = ants.image_read(mask_path)
-        t1_img *= mask_img
-        t2_img *= mask_img
-
+    #     t1_img *= mask_img
+    #     t2_img *= mask_img
 
     # Rigid regsiter to MNI + hist normalization + min/max scaling
     t1_img, t1_mask, registration = register_and_match(
@@ -118,7 +137,11 @@ def runner(
         modality="t1",
         antsxnet_cache_directory=CACHEDIR,
         verbose=False,
+        mask=None if compute_brain_mask else mask_img,
         compute_brain_mask=compute_brain_mask,
+        histogram_match=histogram_match,
+        do_bias_correction=do_bias_correction,
+        histogram_match_points=histogram_match_points,
     )
 
     # Register t2 to the t1 already registered to MNI above
@@ -129,14 +152,19 @@ def runner(
         target_img_mask=t1_mask,
         antsxnet_cache_directory=CACHEDIR,
         verbose=False,
+        mask=None if compute_brain_mask else mask_img,
         compute_brain_mask=compute_brain_mask,
+        histogram_match=histogram_match,
+        do_bias_correction=do_bias_correction,
+        histogram_match_points=histogram_match_points,
     )
 
     # Further apply the opposite modality masks to get a tighter brain crop
     # the same as t1_mask & t2_mask
-    combined_mask = t1_mask * t2_mask
-    t1_img *= combined_mask
-    t2_img *= combined_mask
+    if compute_brain_mask:
+        combined_mask = t1_mask * t2_mask
+        t1_img = ants.mask_image(t1_img, combined_mask)
+        t2_img = ants.mask_image(t2_img, combined_mask)
 
     preproc_img = ants.merge_channels([t1_img, t2_img])
     fname = os.path.join(
@@ -237,6 +265,8 @@ def run(paths, process_fn, chunksize=1):
 if __name__ == "__main__":
     dataset = sys.argv[1]
     assert dataset in [
+        "MSSEG",
+        "CAMCAN",
         "MSLUB",
         "HCP",
         "BRATS-GLI",
@@ -247,7 +277,29 @@ if __name__ == "__main__":
         "ABCD",
     ], "Dataset name must be defined"
 
-    if dataset in ["BRATS-PED", "BRATS-GLI"]:
+    if dataset == "MSSEG":
+        file_paths = get_mssegpaths()
+        run(
+            file_paths,
+            partial(
+                runner,
+                dataset=dataset,
+                save_sub_dir=dataset.lower(),
+                run_segmentation=False,
+            ),
+        )
+    if dataset == "CAMCAN":
+        file_paths = get_camcanpaths()
+        run(
+            file_paths,
+            partial(
+                runner,
+                dataset=dataset,
+                save_sub_dir=dataset.lower(),
+                run_segmentation=False,
+            ),
+        )
+    elif dataset in ["BRATS-PED", "BRATS-GLI"]:
         if dataset == "BRATS-PED":
             file_paths = get_bratspedpaths()
         else:
@@ -270,10 +322,13 @@ if __name__ == "__main__":
             partial(
                 runner,
                 dataset=dataset,
-                save_sub_dir=dataset.lower(),
+                save_sub_dir=dataset.lower() + "-hist-m2",
                 label_img=True,
                 run_segmentation=False,
                 compute_brain_mask=False,
+                do_bias_correction=True,
+                histogram_match=True,
+                histogram_match_points=2
             ),
         )
     elif dataset == "HCP":
