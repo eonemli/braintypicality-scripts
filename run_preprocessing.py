@@ -114,6 +114,7 @@ def runner(
         subject_id, t1_path = path
         t2_path = t1_path.replace("_T1", "_T2")
         subject_id = dataset + subject_id
+        label_path = t1_path.replace("_T1", "_lesion")
     else:
         raise NotImplementedError
 
@@ -124,10 +125,11 @@ def runner(
 
     if dataset in ["BRATS-PED", "BRATS-GLI", "EBDS"]:
         assert not compute_brain_mask, "{dataset} is already brain masked"
+        mask_img = (t1_img > 0).astype("float32")
 
-    if dataset == "MSLUB":
-        assert not compute_brain_mask, "MSLUB has precomputed brain masks"
-        mask_img = ants.image_read(mask_path)
+    # if dataset == "MSLUB":
+    #     assert not compute_brain_mask, "MSLUB has precomputed brain masks"
+    #     mask_img = ants.image_read(mask_path)
     #     t1_img *= mask_img
     #     t2_img *= mask_img
 
@@ -286,9 +288,10 @@ if __name__ == "__main__":
                 dataset=dataset,
                 save_sub_dir=dataset.lower(),
                 run_segmentation=False,
+                label_img=True
             ),
         )
-    if dataset == "CAMCAN":
+    elif dataset == "CAMCAN":
         file_paths = get_camcanpaths()
         run(
             file_paths,
@@ -309,10 +312,11 @@ if __name__ == "__main__":
             partial(
                 runner,
                 dataset=dataset,
-                save_sub_dir=dataset.lower(),
+                save_sub_dir=dataset.lower() + "-hist-m2",
                 compute_brain_mask=False,
                 label_img=True,
                 run_segmentation=False,
+                histogram_match_points=2,
             ),
         )
     elif dataset == "MSLUB":
@@ -325,7 +329,7 @@ if __name__ == "__main__":
                 save_sub_dir=dataset.lower() + "-hist-m2",
                 label_img=True,
                 run_segmentation=False,
-                compute_brain_mask=False,
+                compute_brain_mask=True,
                 do_bias_correction=True,
                 histogram_match=True,
                 histogram_match_points=2
