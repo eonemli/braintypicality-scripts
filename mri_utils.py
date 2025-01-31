@@ -407,7 +407,7 @@ def get_matcher(dataset):
     if dataset == "ABCD":
         return re.compile(r"sub-(.*)\/ses-")  # NDAR..?
 
-    matcher = r"neo-\d{4}-\d(-\d)?"
+    matcher = r"neo-(\d{4}-\d-\d)?"
 
     if dataset == "CONTE2":
         return re.compile(matcher)
@@ -569,6 +569,51 @@ def get_ebdspaths():
     return id_paths
 
 
+def get_contepaths():
+    # /conte_projects/CONTE_NEO/Data/neo-0*-10year/Skull_Stripped/neo-0*-10year-T1_SkullStripped_scaled.nrrd
+
+    R = get_matcher("CONTE2")
+
+    basepath = "/Human2/CONTE2/Data/"
+
+    paths = glob.glob(
+        f"{basepath}/neo-0*/neo-0*-8year/sMRI/Skull_Stripped/*-T1_Bias_regAtlas_corrected_Stripped_scaled.nrrd"
+    )
+    print("FOUND:", len(list(paths)))
+
+    id_paths = []
+
+    for p in paths:
+        t2_path = p.replace("T1_Bias_", "T2_Bias_regT1_")
+
+        # prefer 10 years
+        t1_10yrpath = p.replace("8year", "10year")
+        t2_10yrpath = t2_path.replace("8year", "10year")
+
+        if os.path.exists(t1_10yrpath) and os.path.exists(t2_10yrpath):
+            image_path = t1_10yrpath
+        elif os.path.exists(t2_path):
+            image_path = p
+        else:  # No 10 years or 8 years with T1+T2 => skip
+            print("Missing T2:", p)
+            continue
+
+        match = R.search(image_path)
+        sub_id = match.group(1)
+
+        # Some files cause Segmentation faults when read by ANTs :(
+        if sub_id in ["0279-1-1", "0311-1-1", "0393-2-1", "0540-1-1"]:
+            print("ANTs loading error:", image_path)
+            continue
+
+        # _ = ants.image_read(image_path)
+
+        id_paths.append((sub_id, image_path))
+
+    print("Collected:", len(id_paths))
+    return id_paths
+
+
 def get_hcppaths(split="train"):
     R = get_matcher("HCP")
 
@@ -686,7 +731,9 @@ if __name__ == "__main__":
     split = "train"
     contrast_experiment = False
 
-    if DATASET == "MSSEG":
+    if DATASET == "CONTE":
+        paths = get_contepaths()
+    elif DATASET == "MSSEG":
         paths = get_mssegpaths()
     elif DATASET == "CamCAN":
         paths = get_camcanpaths()

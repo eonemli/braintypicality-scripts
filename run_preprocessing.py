@@ -14,6 +14,7 @@ from mri_utils import (
     get_bratsgliomapaths,
     get_bratspedpaths,
     get_camcanpaths,
+    get_contepaths,
     get_ebdspaths,
     get_hcpdpaths,
     get_hcppaths,
@@ -23,7 +24,7 @@ from mri_utils import (
     register_and_match,
 )
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "3"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 
 DATADIR = "/BEE/Connectome/ABCD/"
@@ -115,6 +116,10 @@ def runner(
         t2_path = t1_path.replace("_T1", "_T2")
         subject_id = dataset + subject_id
         label_path = t1_path.replace("_T1", "_lesion")
+    elif dataset == "CONTE":
+        subject_id, t1_path = path
+        t2_path = t1_path.replace("T1_Bias_", "T2_Bias_regT1_")
+        subject_id = dataset + subject_id
     else:
         raise NotImplementedError
 
@@ -123,7 +128,7 @@ def runner(
 
     mask_img = None
 
-    if dataset in ["BRATS-PED", "BRATS-GLI", "EBDS"]:
+    if dataset in ["CONTE", "BRATS-PED", "BRATS-GLI", "EBDS"]:
         assert not compute_brain_mask, "{dataset} is already brain masked"
         mask_img = (t1_img > 0).astype("float32")
 
@@ -267,6 +272,7 @@ def run(paths, process_fn, chunksize=1):
 if __name__ == "__main__":
     dataset = sys.argv[1]
     assert dataset in [
+        "CONTE",
         "MSSEG",
         "CAMCAN",
         "MSLUB",
@@ -279,7 +285,19 @@ if __name__ == "__main__":
         "ABCD",
     ], "Dataset name must be defined"
 
-    if dataset == "MSSEG":
+    if dataset == "CONTE":
+        file_paths = get_contepaths()
+        run(
+            file_paths,
+            partial(
+                runner,
+                dataset=dataset,
+                save_sub_dir=dataset.lower(),
+                run_segmentation=False,
+                compute_brain_mask=False,
+            ),
+        )
+    elif dataset == "MSSEG":
         file_paths = get_mssegpaths()
         run(
             file_paths,
