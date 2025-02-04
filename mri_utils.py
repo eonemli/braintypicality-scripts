@@ -377,6 +377,12 @@ def lesion_preprocessor(sample):
 
 def get_matcher(dataset):
 
+    if dataset == "CONTE-TRIO":
+        return re.compile(r"(neo-(\d{4}-\d-\d)|(T\d{4}-\d-\d))")
+
+    if dataset == "TWINS":
+        return re.compile(r"(T\d{4}-\d-\d)")
+
     if dataset == "MSSEG":
         return re.compile(r"UNC_train_(Case\d*)\/")
 
@@ -579,20 +585,120 @@ def get_contepaths():
     paths = glob.glob(
         f"{basepath}/neo-0*/neo-0*-8year/sMRI/Skull_Stripped/*-T1_Bias_regAtlas_corrected_Stripped_scaled.nrrd"
     )
+    paths.extend(
+        glob.glob(
+            f"{basepath}/neo-0*/neo-0*-10year/sMRI/Skull_Stripped/*-T1_Bias_regAtlas_corrected_Stripped_scaled.nrrd"
+        )
+    )
     print("FOUND:", len(list(paths)))
 
-    id_paths = []
+    id_paths = {}
+
+    for p in paths:
+        t2_path = p.replace("T1_Bias_", "T2_Bias_regT1_")
+
+        # Older way of excluding 8 years was buggy
+        # It misssed the 10 years that did not have 8 year scans
+
+        if os.path.exists(t2_path):
+            image_path = p
+        else:  # No 10 years or 8 years with T1+T2 => skip
+            print("Missing T2:", p)
+            continue
+
+        match = R.search(image_path)
+        sub_id = match.group(1)
+        if sub_id in id_paths and "10y" in id_paths[sub_id]:
+            continue
+
+        # Some files cause Segmentation faults when read by ANTs :(
+        if sub_id in ["0279-1-1", "0311-1-1", "0393-2-1", "0540-1-1"]:
+            print("ANTs loading error:", image_path)
+            continue
+        # _ = ants.image_read(image_path)
+
+        id_paths[sub_id] = image_path
+        # id_paths.append((sub_id, image_path))
+
+    id_paths = list(id_paths.items())
+    print("Collected:", len(id_paths))
+    return id_paths
+
+
+def get_twinspaths():
+    # /Human2/TWINS2/T0*/T0*-8yr/sMRI/Skull_Stripped/T0*-8yr-T1_Bias_regAtlas_corrected_Stripped_scaled.nrrd
+
+    R = get_matcher("TWINS")
+
+    basepath = "/Human2/TWINS2/"
+
+    paths = glob.glob(
+        f"{basepath}/T0*/T0*-8yr/sMRI/Skull_Stripped/T0*-8yr-T1_Bias_regAtlas_corrected_Stripped_scaled.nrrd"
+    )
+    paths.extend(
+        glob.glob(
+            f"{basepath}/T0*/T0*-10yr/sMRI/Skull_Stripped/T0*-10yr-T1_Bias_regAtlas_corrected_Stripped_scaled.nrrd"
+        )
+    )
+    print("FOUND:", len(list(paths)))
+
+    id_paths = {}
 
     for p in paths:
         t2_path = p.replace("T1_Bias_", "T2_Bias_regT1_")
 
         # prefer 10 years
-        t1_10yrpath = p.replace("8year", "10year")
-        t2_10yrpath = t2_path.replace("8year", "10year")
+        if os.path.exists(t2_path):
+            image_path = p
+        else:  # No 10 years or 8 years with T1+T2 => skip
+            print("Missing T2:", p)
+            continue
 
-        if os.path.exists(t1_10yrpath) and os.path.exists(t2_10yrpath):
-            image_path = t1_10yrpath
-        elif os.path.exists(t2_path):
+        match = R.search(image_path)
+        sub_id = match.group(1)
+        if sub_id in id_paths and "10y" in id_paths[sub_id]:
+            continue
+
+        match = R.search(image_path)
+        sub_id = match.group(1)
+        id_paths[sub_id] = image_path
+
+    id_paths = list(id_paths.items())
+    print("Collected:", len(id_paths))
+    return id_paths
+
+
+def get_contetriopaths():
+    # /conte_projects/CONTE_NEO/Data/neo-0*-8year/Skull_Stripped/neo-0*-8year-T1_SkullStripped_scaled.nrrd
+    # re.compile(r"(neo-(\d{4}-\d-\d)|(T\d{4}-\d-\d))")
+    R = get_matcher("CONTE-TRIO")
+
+    paths = glob.glob(
+        "/conte_projects/CONTE_NEO/Data/neo-0*-8year/Skull_Stripped/neo-0*-8year-T1_SkullStripped_scaled.nrrd"
+    )
+    paths.extend(
+        glob.glob(
+            "/conte_projects/CONTE_NEO/Data/neo-0*-10year/Skull_Stripped/neo-0*-10year-T1_SkullStripped_scaled.nrrd"
+        )
+    )
+    paths.extend(
+        glob.glob(
+            "/twin-gilmore/T0*/T0*-8yr/Skull_Stripped/T0*-8yr-T1_SkullStripped_scaled.nrrd"
+        )
+    )
+    paths.extend(
+        glob.glob(
+            "/twin-gilmore/T0*/T0*-10yr/Skull_Stripped/T0*-10yr-T1_SkullStripped_scaled.nrrd"
+        )
+    )
+    print("FOUND:", len(list(paths)))
+
+    id_paths = {}
+
+    for p in paths:
+        t2_path = p.replace("T1_", "T2_")
+
+        if os.path.exists(t2_path):
             image_path = p
         else:  # No 10 years or 8 years with T1+T2 => skip
             print("Missing T2:", p)
@@ -601,15 +707,13 @@ def get_contepaths():
         match = R.search(image_path)
         sub_id = match.group(1)
 
-        # Some files cause Segmentation faults when read by ANTs :(
-        if sub_id in ["0279-1-1", "0311-1-1", "0393-2-1", "0540-1-1"]:
-            print("ANTs loading error:", image_path)
+        # prefer 10 years
+        if sub_id in id_paths and "10y" in id_paths[sub_id]:
             continue
 
-        # _ = ants.image_read(image_path)
+        id_paths[sub_id] = image_path
 
-        id_paths.append((sub_id, image_path))
-
+    id_paths = list(id_paths.items())
     print("Collected:", len(id_paths))
     return id_paths
 
@@ -731,7 +835,11 @@ if __name__ == "__main__":
     split = "train"
     contrast_experiment = False
 
-    if DATASET == "CONTE":
+    if DATASET == "CONTE-TRIO":
+        paths = get_contetriopaths()
+    elif DATASET == "TWINS":
+        paths = get_twinspaths()
+    elif DATASET == "CONTE":
         paths = get_contepaths()
     elif DATASET == "MSSEG":
         paths = get_mssegpaths()

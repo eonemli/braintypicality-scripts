@@ -21,10 +21,12 @@ from mri_utils import (
     get_ibispaths,
     get_mslubpaths,
     get_mssegpaths,
+    get_twinspaths,
+    get_contetriopaths,
     register_and_match,
 )
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+os.environ["CUDA_VISIBLE_DEVICES"] = "2"
 
 
 DATADIR = "/BEE/Connectome/ABCD/"
@@ -65,7 +67,6 @@ def runner(
     do_bias_correction=True,
     histogram_match=True,
     histogram_match_points=5,
-
 ):
     import ants
     import antspynet
@@ -116,9 +117,13 @@ def runner(
         t2_path = t1_path.replace("_T1", "_T2")
         subject_id = dataset + subject_id
         label_path = t1_path.replace("_T1", "_lesion")
-    elif dataset == "CONTE":
+    elif dataset in ["CONTE", "TWINS"]:
         subject_id, t1_path = path
         t2_path = t1_path.replace("T1_Bias_", "T2_Bias_regT1_")
+        subject_id = dataset + subject_id
+    elif dataset == "CONTE-TRIO":
+        subject_id, t1_path = path
+        t2_path = t1_path.replace("T1_", "T2_")
         subject_id = dataset + subject_id
     else:
         raise NotImplementedError
@@ -128,7 +133,7 @@ def runner(
 
     mask_img = None
 
-    if dataset in ["CONTE", "BRATS-PED", "BRATS-GLI", "EBDS"]:
+    if dataset in ["CONTE-TRIO", "TWINS", "CONTE", "BRATS-PED", "BRATS-GLI", "EBDS"]:
         assert not compute_brain_mask, "{dataset} is already brain masked"
         mask_img = (t1_img > 0).astype("float32")
 
@@ -272,6 +277,8 @@ def run(paths, process_fn, chunksize=1):
 if __name__ == "__main__":
     dataset = sys.argv[1]
     assert dataset in [
+        "CONTE-TRIO",
+        "TWINS",
         "CONTE",
         "MSSEG",
         "CAMCAN",
@@ -285,7 +292,31 @@ if __name__ == "__main__":
         "ABCD",
     ], "Dataset name must be defined"
 
-    if dataset == "CONTE":
+    if dataset == "CONTE-TRIO":
+        file_paths = get_contetriopaths()
+        run(
+            file_paths,
+            partial(
+                runner,
+                dataset=dataset,
+                save_sub_dir=dataset.lower(),
+                run_segmentation=False,
+                compute_brain_mask=False,
+            ),
+        )
+    elif dataset == "TWINS":
+        file_paths = get_twinspaths()
+        run(
+            file_paths,
+            partial(
+                runner,
+                dataset=dataset,
+                save_sub_dir=dataset.lower(),
+                run_segmentation=False,
+                compute_brain_mask=False,
+            ),
+        )
+    elif dataset == "CONTE":
         file_paths = get_contepaths()
         run(
             file_paths,
@@ -306,7 +337,7 @@ if __name__ == "__main__":
                 dataset=dataset,
                 save_sub_dir=dataset.lower(),
                 run_segmentation=False,
-                label_img=True
+                label_img=True,
             ),
         )
     elif dataset == "CAMCAN":
@@ -350,7 +381,7 @@ if __name__ == "__main__":
                 compute_brain_mask=True,
                 do_bias_correction=True,
                 histogram_match=True,
-                histogram_match_points=2
+                histogram_match_points=2,
             ),
         )
     elif dataset == "HCP":
