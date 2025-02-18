@@ -1,4 +1,6 @@
+import glob
 import os
+import re
 import sys
 
 import ants
@@ -10,7 +12,8 @@ from sade.datasets.transforms import get_val_transform
 from tqdm import tqdm
 
 CACHE_DIR = "/codespace/braintypicality/dataset/template_cache/"
-
+# DATADIR = "/BEE/Connectome/ABCD/"
+DATADIR = "/DATA/"
 procd_ref_img_path = f"{CACHE_DIR}/cropped_niral_mni.nii.gz"
 
 ####
@@ -48,15 +51,10 @@ if not os.path.exists(procd_ref_img_path):
     procd_ref_img.to_filename(procd_ref_img_path)
 ####
 
-FLAGS = flags.FLAGS
-config_flags.DEFINE_config_file("config", None, "Sade configuration used to train the model.", lock_config=True)
-flags.DEFINE_string("dataset", None, "The dataset for which to run the registration (should match names used in config and splits dir).")
 
-def run_registration(argv):
+def run_registration(config, dataset_name):
 
-    config = FLAGS.config
-    dataset_name = FLAGS.dataset
-    savedir = f"/DATA/Users/amahmood/braintyp/spacing_{int(config.data.spacing_pix_dim)}-ants"
+    savedir = f"/{DATADIR}/Users/amahmood/braintyp/spacing_{int(config.data.spacing_pix_dim)}-ants"
     os.makedirs(savedir, exist_ok=True)
 
     img_loader = get_val_transform(config)
@@ -72,7 +70,7 @@ def run_registration(argv):
         img_tensor = img_loader(fname_dict)["image"].numpy()
         t1_img = (ants.from_numpy(img_tensor[0]) + 1) / 2
 
-        fname = fname_dict['image']
+        fname = fname_dict["image"]
         sampleid = os.path.basename(fname).split(".nii.gz")[0]
 
         if config.data.spacing_pix_dim == 1.0:
@@ -92,5 +90,115 @@ def run_registration(argv):
             verbose=0,
         )
 
+
+def extract_id(fname):
+    return re.match("(.*)(.nii.gz|.npz)$", fname).group(1)
+
+
+def apply_registration(config, load_dir, save_dir):
+    os.makedirs(save_dir, exist_ok=True)
+    transforms_dir = f"/{DATADIR}/Users/amahmood/braintyp/spacing_{int(config.data.spacing_pix_dim)}-ants"
+    procd_ref_img_path = f"{CACHE_DIR}/cropped_niral_mni.nii.gz"
+
+    img_loader = get_val_transform(config)
+    ref_img_tensor = img_loader({"image": procd_ref_img_path})["image"].numpy()
+    ref_img_post_transform = (ants.from_numpy(ref_img_tensor[0]) + 1) / 2
+
+    print(
+        f"Applying registrations from {transforms_dir} to images in {load_dir} and saving to {save_dir}."
+    )
+    paths = glob.glob(os.path.join(load_dir, "*"))
+    for fname in tqdm(paths):
+
+        if ".npz" in fname:
+            x = np.load(fname)["heatmap"]
+            x = ants.from_numpy(x)
+        elif ".nii.gz" in fname:
+            x = ants.image_read(fname)
+        else:
+            raise ValueError(
+                f"File format of {fname} not recognized - must be .nii.gz or .npz."
+            )
+
+        sid = extract_id(os.path.basename(fname))
+        transform_mat = f"{transforms_dir}/{sid}Composite.h5"
+        h_aligned = ants.apply_transforms(
+            fixed=ref_img_post_transform,
+            interpolator="linear",
+            verbose=False,
+            moving=x,
+            transformlist=transform_mat,
+        )
+        h_aligned.to_filename(f"{save_dir}/{sid}.nii.gz")
+
+
+FLAGS = flags.FLAGS
+config_flags.DEFINE_config_file(
+    "config", None, "Sade configuration used to train the model.", lock_config=True
+)
+flags.DEFINE_enum(
+    "mode",
+    None,
+    ["compute", "apply"],
+    "Whether to compute the registrations and save them or apply them from saved directory.",
+)
+flags.DEFINE_string(
+    "dataset",
+    None,
+    "The dataset for which to run the registration (should match names used in config and splits dir).",
+)
+flags.DEFINE_string(
+    "load_dir",
+    None,
+    "Directory containing the images to register - only used in apply mode.",
+    required=False,
+)
+flags.DEFINE_string(
+    "save_dir",
+    None,
+    "Directory to save the registered images - only used in apply mode.",
+    required=False,
+)
+
+
+def main(argv):
+    if FLAGS.mode == "compute":
+        config = FLAGS.config
+        config.data.splits_dir = (
+            "/ASD/ahsan_projects/Developer/braintypicality-scripts/split-keys/"
+        )
+        run_registration(FLAGS.config, FLAGS.dataset)
+    elif FLAGS.mode == "apply":
+        assert FLAGS.load_dir is not None, "load_dir must be provided in apply mode."
+        assert FLAGS.save_dir is not None, "save_dir must be provided in apply mode."
+        apply_registration(FLAGS.config, FLAGS.load_dir, FLAGS.save_dir)
+    else:
+        raise ValueError(f"Mode {FLAGS.mode} not recognized.")
+
+
+"""
+This script is used to compute and apply registrations to the voxelwise heatmaps using ANTs.
+It is recommended to use this script as the data loader of sade crops the original images,
+and therefore there is a mismatch in the image sizes between the heatmaps and the original images.
+This script computes registrations on cropped input images using loaders from `sade.datasets`.
+Alternatively, one could use their own registration script but should make sure to 
+pad the heatmaps to the original image size before applying the registrations.
+
+Example usage:
+
+# This will compute the registrations for the conte dataset
+# and save them to the transforms directory specified in the code.
+python sade_registration.py --mode compute \
+    --config /codespace/sade/sade/configs/ve/biggan_config.py \
+    --dataset conte
+
+# This will apply the registrations from the transforms directory
+python sade_registration.py --mode apply \
+    --config /codespace/sade/sade/configs/ve/biggan_config.py \
+    --dataset conte \
+    --load_dir /ASD/ahsan_projects/braintypicality/workdir/cuda_opt/learnable/experiments/reprod-correct/conte \
+    --save_dir /ASD/ahsan_projects/Developer/ds-analysis/ebds/registered-heatmaps/
+
+"""
 if __name__ == "__main__":
-    app.run(run_registration)
+    app.run(main)
