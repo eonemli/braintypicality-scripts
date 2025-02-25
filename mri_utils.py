@@ -422,7 +422,6 @@ def get_matcher(dataset):
 
 
 def get_abcdpaths(split="train"):
-    assert split in ["train", "val", "test", "ood"]
 
     R = get_matcher("ABCD")
 
@@ -431,10 +430,7 @@ def get_abcdpaths(split="train"):
     )
     clean = lambda x: x.strip().replace("_", "")
 
-    inlier_paths = []
-
-    with open(f"{split}_keys.txt", "r") as f:
-        inlier_keys = set([clean(x) for x in f.readlines()])
+    file_paths = []
 
     for path in paths:
         match = R.search(path)
@@ -832,7 +828,6 @@ if __name__ == "__main__":
 
     BASE_DIR = "/DATA/Users/amahmood/braintyp/"
     DATASET = sys.argv[1]
-    split = "train"
     contrast_experiment = False
 
     if DATASET == "CONTE-TRIO":
@@ -864,7 +859,7 @@ if __name__ == "__main__":
     elif DATASET == "HCP":
         paths = get_hcppaths()
     else:
-        paths = get_abcdpaths(split)
+        paths = get_abcdpaths()
 
     # if not os.path.exists(SAVE_DIR):
     #     os.makedirs(SAVE_DIR)
