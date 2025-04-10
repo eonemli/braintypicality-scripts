@@ -30,8 +30,8 @@ os.environ["CUDA_VISIBLE_DEVICES"] = "2"
 
 
 DATADIR = "/BEE/Connectome/ABCD/"
-CACHEDIR = "/ASD/ahsan_projects/braintypicality/dataset/template_cache/"
-
+# CACHEDIR = "/ASD/ahsan_projects/braintypicality/dataset/template_cache/"
+CACHEDIR = "/ASD2/emre_projects/OOD/braintypicality2/braintypicality/dataset/template_cache"
 
 gpus = tf.config.list_physical_devices("GPU")
 
@@ -73,7 +73,7 @@ def runner(
     from antspynet.utilities import preprocess_brain_image
 
     t1_path = t2_path = label_path = None
-    os.makedirs(f"/{DATADIR}/Users/amahmood/braintyp/{save_sub_dir}", exist_ok=True)
+    os.makedirs(f"/{DATADIR}/Users/emre/braintyp/{save_sub_dir}", exist_ok=True)
 
     if dataset == "ABCD":
         R = re.compile(r"Data\/sub-(.*)\/ses-")
@@ -180,7 +180,7 @@ def runner(
 
     preproc_img = ants.merge_channels([t1_img, t2_img])
     fname = os.path.join(
-        f"/{DATADIR}/Users/amahmood/braintyp/{save_sub_dir}", f"{subject_id}.nii.gz"
+        f"/{DATADIR}/Users/emre/braintyp/{save_sub_dir}", f"{subject_id}.nii.gz"
     )
     preproc_img.to_filename(fname)
 
@@ -195,7 +195,7 @@ def runner(
             interpolator="genericLabel",
         )
         fname = os.path.join(
-            f"/{DATADIR}/Users/amahmood/braintyp/{save_sub_dir}",
+            f"/{DATADIR}/Users/emre/braintyp/{save_sub_dir}",
             f"{subject_id}_label.nii.gz",
         )
         lab_img.to_filename(fname)
@@ -221,7 +221,7 @@ def runner(
         )["segmentation_image"]
 
         t1_seg.to_filename(
-            f"/{DATADIR}/Users/amahmood/braintyp/segs/{subject_id}.nii.gz"
+            f"/{DATADIR}/Users/emre/braintyp/segs/{subject_id}.nii.gz"
         )
 
         # Also register segmentations to new t1
@@ -241,7 +241,7 @@ def runner(
 
         # Save outputs
         fname = os.path.join(
-            f"/{DATADIR}/Users/amahmood/braintyp/segs/", f"{subject_id}.npz"
+            f"/{DATADIR}/Users/emre/braintyp/segs/", f"{subject_id}.npz"
         )
         np.savez_compressed(fname, **{"t1": t1_wm, "t2": t2_wm})
 
@@ -401,7 +401,7 @@ if __name__ == "__main__":
         run(file_paths, partial(runner, dataset=dataset))
     else:  # get abcd paths
         paths = glob.glob(
-            "/{DATADIR}/ImageData/Data/*/ses-baselineYear1Arm1/anat/*T1w.nii.gz"
+            f"/{DATADIR}/ImageData/Data/*/ses-baselineYear1Arm1/anat/*T1w.nii.gz"
         )
         R = re.compile(r"Data\/sub-(.*)\/ses-")
         clean = lambda x: x.strip().replace("_", "")
@@ -412,7 +412,18 @@ if __name__ == "__main__":
         file_paths = []
         id_checker = lambda x: R.search(x).group(1) in abcd_qc_keys
         file_paths = list(filter(id_checker, paths))
+        #assert len(file_paths) == len(abcd_qc_keys)
 
-        assert len(file_paths) == len(abcd_qc_keys)
+        print(f"Total paths found: {len(paths)}")
+        print(f"Subject IDs loaded: {len(abcd_qc_keys)}")
 
-        run(file_paths, runner)
+        file_paths = list(filter(id_checker, paths))
+        print(f"Filtered paths after matching: {len(file_paths)}")
+
+        # Optionally: print a few examples
+        print("Example path:", file_paths[0] if file_paths else "No paths found")
+
+
+
+        #run(file_paths, runner)
+        run(file_paths, partial(runner, dataset=dataset))

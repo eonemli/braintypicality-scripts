@@ -1,7 +1,7 @@
 import os
 import sys
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+os.environ["CUDA_VISIBLE_DEVICES"] = "2"
 import glob
 import re
 import time
@@ -73,7 +73,7 @@ def extract_brain_mask(
     probability_mask = brain_extraction(
         preprocessed_image,
         modality=modality,
-        antsxnet_cache_directory=antsxnet_cache_directory,
+        #antsxnet_cache_directory=antsxnet_cache_directory,
         verbose=verbose,
     )
     mask = ants.threshold_image(probability_mask, 0.5, 1, 1, 0)
@@ -169,7 +169,7 @@ def register_and_match(
         probability_mask = brain_extraction(
             preprocessed_image,
             modality=modality,
-            antsxnet_cache_directory=antsxnet_cache_directory,
+            #antsxnet_cache_directory=antsxnet_cache_directory,
             verbose=verbose,
         )
         mask = ants.threshold_image(probability_mask, 0.5, 1, 1, 0)
