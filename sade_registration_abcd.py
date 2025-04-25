@@ -97,10 +97,10 @@ def extract_id(fname):
     return re.match("(.*)(.nii.gz|.npz)$", fname).group(1)
 
 
-def apply_registration(config, load_dir, save_dir):
+def apply_registration(config, load_dir, save_dir, image_type):
     os.makedirs(save_dir, exist_ok=True)
-    # transforms_dir = f"/{DATADIR}/Users/amahmood/braintyp/spacing_{int(config.data.spacing_pix_dim)}-ants"
-    transforms_dir = f"/{DATADIR}/Users/emre/braintyp/spacing_{int(config.data.spacing_pix_dim)}-ants"
+    transforms_dir = f"/{DATADIR}/Users/amahmood/braintyp/spacing_{int(config.data.spacing_pix_dim)}"
+    #transforms_dir = f"/{DATADIR}/Users/emre/braintyp/spacing_{int(config.data.spacing_pix_dim)}-ants"
     procd_ref_img_path = f"{CACHE_DIR}/cropped_niral_mni.nii.gz"
 
     img_loader = get_val_transform(config)
@@ -114,8 +114,8 @@ def apply_registration(config, load_dir, save_dir):
     for fname in tqdm(paths):
 
         if ".npz" in fname:
-            x = np.load(fname)["heatmap"]
-            x = ants.from_numpy(x)
+            x = np.load(fname)["heatmap"] if image_type == "heatmap" else np.load(fname)["original"]
+            x = ants.from_numpy(x) if image_type == "heatmap" else [ants.from_numpy((x[c])) for c in range(x.shape[0])]
         elif ".nii.gz" in fname:
             x = ants.image_read(fname)
         else:
@@ -125,13 +125,36 @@ def apply_registration(config, load_dir, save_dir):
 
         sid = extract_id(os.path.basename(fname))
         transform_mat = f"{transforms_dir}/{sid}Composite.h5"
-        h_aligned = ants.apply_transforms(
-            fixed=ref_img_post_transform,
-            interpolator="linear",
-            verbose=False,
-            moving=x,
-            transformlist=transform_mat,
-        )
+        
+        if image_type == "original":
+            ch1, ch2 = x[0], x[1]
+
+            h_aligned_1 = ants.apply_transforms(
+                fixed=ref_img_post_transform,
+                interpolator="linear",
+                verbose=False,
+                moving=ch1,
+                transformlist=transform_mat,
+            )
+
+            h_aligned_2 = ants.apply_transforms(
+                fixed=ref_img_post_transform,
+                interpolator="linear",
+                verbose=False,
+                moving=ch2,
+                transformlist=transform_mat,
+            )
+            h_aligned = ants.merge_channels([h_aligned_1, h_aligned_2])
+
+        else:
+            h_aligned = ants.apply_transforms(
+                fixed=ref_img_post_transform,
+                interpolator="linear",
+                verbose=False,
+                moving=x,
+                transformlist=transform_mat,
+            )
+
         h_aligned.to_filename(f"{save_dir}/{sid}.nii.gz")
 
 
@@ -162,6 +185,13 @@ flags.DEFINE_string(
     "Directory to save the registered images - only used in apply mode.",
     required=False,
 )
+flags.DEFINE_enum(
+    "image_type",
+    None,
+    ["original", "heatmap"],
+    "Whether to apply the registration to the original images or the heatmaps - only used in apply mode.",
+    required=False,
+)
 
 
 def main(argv):
@@ -175,7 +205,8 @@ def main(argv):
     elif FLAGS.mode == "apply":
         assert FLAGS.load_dir is not None, "load_dir must be provided in apply mode."
         assert FLAGS.save_dir is not None, "save_dir must be provided in apply mode."
-        apply_registration(FLAGS.config, FLAGS.load_dir, FLAGS.save_dir)
+        assert FLAGS.image_type is not None, "image_type (original or heatmap) must be provided in apply mode."
+        apply_registration(FLAGS.config, FLAGS.load_dir, FLAGS.save_dir, FLAGS.image_type)
     else:
         raise ValueError(f"Mode {FLAGS.mode} not recognized.")
 
@@ -222,6 +253,51 @@ python sade_registration_abcd.py --mode apply \
     --config /ASD2/emre_projects/OOD/scripts/sade/sade/configs/default_brain_configs_abcd_asd.py \
     --dataset abcd-asd \
     --load_dir /ASD2/emre_projects/OOD/braintypicality2/braintypicality/workdir/cuda_opt/learnable/experiments/reprod-correct/abcd-asd \
-    --save_dir /ASD2/emre_projects/OOD/braintypicality2/braintypicality/workdir/cuda_opt/learnable/experiments/reprod-correct/registered-heatmaps-abcd-asd/
+    --save_dir /ASD2/emre_projects/OOD/braintypicality2/braintypicality/workdir/cuda_opt/learnable/experiments/reprod-correct/registered-originals-abcd-asd/
+
+"""
+
+
+
+
+""""
+Example usage for ABCD-ASD v2:
+
+# This will compute the registrations for the abcd-asd dataset
+# and save them to the transforms directory specified in the code.
+python sade_registration_abcd.py --mode compute \
+    --config /ASD2/emre_projects/OOD/scripts/sade/sade/configs/ve/biggan_config_abcd_asd.py \
+    --dataset abcd-asd
+
+    
+# This will apply the registrations from the transforms directory to the original images
+python sade_registration_abcd.py --mode apply \
+    --config /ASD2/emre_projects/OOD/scripts/sade/sade/configs/ve/biggan_config_abcd_asd.py \
+    --dataset abcd-asd \
+    --load_dir /ASD2/emre_projects/OOD/braintypicality2/braintypicality/workdir/cuda_opt/learnable/experiments/reprod-correct/abcd-asd \
+    --save_dir /ASD2/emre_projects/OOD/braintypicality2/braintypicality/workdir/cuda_opt/learnable/experiments/reprod-correct/registered-originals-abcd-asd/ \
+    --image_type original
+
+    
+
+
+# This will apply the registrations from the transforms directory to the heatmaps
+python sade_registration_abcd.py --mode apply \
+    --config /ASD2/emre_projects/OOD/scripts/sade/sade/configs/ve/biggan_config_abcd_asd.py \
+    --dataset abcd-asd \
+    --load_dir /ASD2/emre_projects/OOD/braintypicality2/braintypicality/workdir/cuda_opt/learnable/experiments/reprod-correct/abcd-asd \
+    --save_dir /ASD2/emre_projects/OOD/braintypicality2/braintypicality/workdir/cuda_opt/learnable/experiments/reprod-correct/registered-heatmaps-abcd-asd/ \
+    --image_type heatmap
+
+
+
+
+python sade_registration_abcd.py --mode apply \
+    --config /ASD2/emre_projects/OOD/scripts/sade/sade/configs/ve/biggan_config_abcd_asd.py \
+    --dataset ibis-inlier \
+    --load_dir /ASD2/emre_projects/OOD/braintypicality2/braintypicality/workdir/cuda_opt/learnable/experiments/reprod-correct/ibis-inlier \
+    --save_dir /ASD2/emre_projects/OOD/braintypicality2/braintypicality/workdir/cuda_opt/learnable/experiments/reprod-correct/registered-originals-ibis-inlier/ \
+    --image_type original
+
 
 """
