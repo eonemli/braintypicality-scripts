@@ -239,29 +239,10 @@ if __name__ == "__main__":
     app.run(main)
 
 
+
+
 """"
 Example usage for ABCD-ASD:
-
-# This will compute the registrations for the abcd-asd dataset
-# and save them to the transforms directory specified in the code.
-python sade_registration_abcd.py --mode compute \
-    --config /ASD2/emre_projects/OOD/scripts/sade/sade/configs/default_brain_configs_abcd_asd.py \
-    --dataset abcd-asd
-
-# This will apply the registrations from the transforms directory
-python sade_registration_abcd.py --mode apply \
-    --config /ASD2/emre_projects/OOD/scripts/sade/sade/configs/default_brain_configs_abcd_asd.py \
-    --dataset abcd-asd \
-    --load_dir /ASD2/emre_projects/OOD/braintypicality2/braintypicality/workdir/cuda_opt/learnable/experiments/reprod-correct/abcd-asd \
-    --save_dir /ASD2/emre_projects/OOD/braintypicality2/braintypicality/workdir/cuda_opt/learnable/experiments/reprod-correct/registered-originals-abcd-asd/
-
-"""
-
-
-
-
-""""
-Example usage for ABCD-ASD v2:
 
 # This will compute the registrations for the abcd-asd dataset
 # and save them to the transforms directory specified in the code.
@@ -291,7 +272,7 @@ python sade_registration_abcd.py --mode apply \
 
 
 
-
+# This will apply the registrations from the transforms directory to the original images (IBIS inlier)
 python sade_registration_abcd.py --mode apply \
     --config /ASD2/emre_projects/OOD/scripts/sade/sade/configs/ve/biggan_config_abcd_asd.py \
     --dataset ibis-inlier \
